@@ -2,6 +2,8 @@ ARG_NAME=""
 ARG_DESCRIPTION=""
 ARG_PATH=""
 ARG_UNITS=""
+ARG_BASELINE=""
+ARG_OUTPUT=""
 ARG_FORCE="false"
 ARG_INTERACTIVE="true"
 
@@ -10,6 +12,8 @@ parse_options() {
   ARG_DESCRIPTION=""
   ARG_PATH=""
   ARG_UNITS=""
+  ARG_BASELINE=""
+  ARG_OUTPUT=""
   ARG_FORCE="false"
   ARG_INTERACTIVE="true"
 
@@ -33,6 +37,16 @@ parse_options() {
       --units)
         [[ $# -ge 2 ]] || die "Missing value for '--units'."
         ARG_UNITS="$2"
+        shift 2
+        ;;
+      --baseline)
+        [[ $# -ge 2 ]] || die "Missing value for '--baseline'."
+        ARG_BASELINE="$2"
+        shift 2
+        ;;
+      --output)
+        [[ $# -ge 2 ]] || die "Missing value for '--output'."
+        ARG_OUTPUT="$2"
         shift 2
         ;;
       --force)

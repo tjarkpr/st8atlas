@@ -29,3 +29,24 @@ unit_stack_names() {
 unit_stack_count() {
   unit_stack_names "$1" | grep -c . || true
 }
+
+# Prints the unit names a unit depends on, taken from its 'dependency' and
+# 'dependencies' blocks. Paths are reduced to their last segment.
+unit_dependency_names() {
+  local unit_file="$1"
+  [[ -f "$unit_file" ]] || return 0
+
+  {
+    grep -oE 'config_path[[:space:]]*=[[:space:]]*"[^"]+"' "$unit_file" || true
+    awk '
+      /dependencies[[:space:]]*=?[[:space:]]*\{/ { inside = 1 }
+      inside { print }
+      inside && /\}/ { inside = 0 }
+    ' "$unit_file"
+  } 2> /dev/null \
+    | grep -oE '"[^"]+"' \
+    | tr -d '"' \
+    | sed -E 's#/+$##; s#.*/##' \
+    | grep -vE '^(\.|\.\.)?$' \
+    | sort -u || true
+}

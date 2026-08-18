@@ -13,17 +13,17 @@ for stub in terraform terragrunt c3x; do
   chmod +x "${STUB_DIR}/${stub}"
 done
 
-# The graphviz stub writes the file that -o points at.
+# The graphviz stub writes the DOT source it receives to the file that -o points at,
+# which lets the tests assert on the generated graph.
 cat > "${STUB_DIR}/dot" <<'STUB'
 #!/usr/bin/env bash
-output=""
+output="/dev/null"
 previous=""
 for argument in "$@"; do
   [[ "$previous" == "-o" ]] && output="$argument"
   previous="$argument"
 done
-cat > /dev/null
-[[ -n "$output" ]] && echo "STUB png" > "$output"
+cat > "$output"
 STUB
 chmod +x "${STUB_DIR}/dot"
 
@@ -227,9 +227,61 @@ assert_success "cost sync backfills existing stacks" bash "$ST8" cost sync
 assert_path "cost sync adds the config to older stacks" "${PROJECT_DIR}/stacks/shared/platform/c3x-usage.yml"
 assert_success "diagram renders" bash "$ST8" diagram --name billing
 assert_path "diagram.png created" "${PROJECT_DIR}/stacks/billing/diagram.png"
+assert_file_contains "diagram contains the unit" "${PROJECT_DIR}/stacks/billing/diagram.png" 'unit_metering'
+assert_file_contains "diagram contains the module" "${PROJECT_DIR}/stacks/billing/diagram.png" 'modules/metering'
 assert_success "diagram honours --path" bash "$ST8" diagram --name billing --path "${PROJECT_DIR}/custom.png"
 assert_path "diagram written to the custom path" "${PROJECT_DIR}/custom.png"
 assert_failure "diagram on an unknown stack fails" bash "$ST8" diagram --name missing
+
+assert_success "unit add for the dependency tests" bash "$ST8" unit add --name ledger
+assert_success "stack takes both units" bash "$ST8" stack units --name billing --units metering,ledger
+cat >> "${PROJECT_DIR}/units/metering/terragrunt.hcl" <<'HCL'
+
+dependency "ledger" {
+  config_path = "../ledger"
+}
+
+dependencies {
+  paths = ["../archive"]
+}
+HCL
+assert_success "diagram renders with dependencies" bash "$ST8" diagram --name billing
+assert_file_contains "diagram links the dependency" "${PROJECT_DIR}/stacks/billing/diagram.png" '"unit_metering" -> "unit_ledger"'
+assert_file_contains "diagram labels dependency edges" "${PROJECT_DIR}/stacks/billing/diagram.png" 'depends on'
+assert_file_contains "diagram marks dependencies outside the stack" "${PROJECT_DIR}/stacks/billing/diagram.png" 'external_archive'
+
+echo "snapshot and diff"
+SNAPSHOT="${PROJECT_DIR}/stacks/billing/stack.st8"
+assert_path "stack.st8 written on stack changes" "$SNAPSHOT"
+assert_success "snapshot can be regenerated" bash "$ST8" stack snapshot --name billing
+assert_file_contains "snapshot has a version header" "$SNAPSHOT" '^version|1$'
+assert_file_contains "snapshot names the stack" "$SNAPSHOT" '^stack|billing$'
+assert_file_contains "snapshot has a units section" "$SNAPSHOT" '^\[units\]$'
+assert_file_contains "snapshot lists the units" "$SNAPSHOT" '^metering$'
+assert_file_contains "snapshot has a dependencies section" "$SNAPSHOT" '^\[dependencies\]$'
+assert_file_contains "snapshot records the dependency" "$SNAPSHOT" '^metering|ledger$'
+assert_file_contains "snapshot embeds the raw diagram" "$SNAPSHOT" '^digraph "billing" {$'
+assert_file_contains "snapshot embeds the cost as json" "$SNAPSHOT" '"stack": "billing"'
+assert_file_lacks "snapshot cost section is not markdown" "$SNAPSHOT" '# Cost breakdown'
+
+BASELINE="${WORK_DIR}/baseline.st8"
+cp "$SNAPSHOT" "$BASELINE"
+assert_success "stack shrinks for the diff" bash "$ST8" stack units --name billing --units metering
+assert_output "diff reports the stack" "# Stack diff: billing" bash "$ST8" stack diff --name billing --baseline "$BASELINE"
+assert_output "diff reports the removed unit" "**removed**" bash "$ST8" stack diff --name billing --baseline "$BASELINE"
+assert_output "diff renders a units table" "| Unit | Baseline | Current | Change |" bash "$ST8" stack diff --name billing --baseline "$BASELINE"
+assert_output "diff reports the changed diagram" "## Diagram" bash "$ST8" stack diff --name billing --baseline "$BASELINE"
+assert_output "diff reports the cost section" "## Cost" bash "$ST8" stack diff --name billing --baseline "$BASELINE"
+assert_success "diff writes to --output" bash "$ST8" stack diff --name billing --baseline "$BASELINE" --output "${WORK_DIR}/report.md"
+assert_file_contains "diff report written to disk" "${WORK_DIR}/report.md" "# Stack diff: billing"
+assert_file_lacks "dependency table has no raw pipes" "${WORK_DIR}/report.md" '| `metering|ledger` |'
+assert_failure "diff without a baseline fails" bash "$ST8" stack diff --name billing
+assert_failure "diff with a missing baseline fails" bash "$ST8" stack diff --name billing --baseline "${WORK_DIR}/nope.st8"
+
+assert_output "cost report is markdown" "# Cost breakdown: billing" bash "$ST8" cost report --name billing
+assert_output "cost report has a unit table" "| Unit | Module | Estimated |" bash "$ST8" cost report --name billing
+assert_success "cost report writes to --output" bash "$ST8" cost report --name billing --output "${WORK_DIR}/cost.md"
+assert_file_contains "cost report written to disk" "${WORK_DIR}/cost.md" "## Unit \`metering\`"
 
 export ST8ATLAS_EXTENSIONS_DIR="$NO_EXTENSIONS_DIR"
 rm -rf "$EXTENSIONS_DIR"

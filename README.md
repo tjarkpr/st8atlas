@@ -56,7 +56,8 @@ my-project/
 │   └── shared/
 │       ├── root.hcl           # inherits the level above
 │       └── platform/
-│           └── terragrunt.stack.hcl
+│           ├── terragrunt.stack.hcl
+│           └── stack.st8      # snapshot used by 'stack diff'
 ├── units/
 │   └── storage/
 │       └── terragrunt.hcl
@@ -97,6 +98,8 @@ Creates `atlas.st8`, `.gitignore` and the `stacks/`, `units/` and `modules/` dir
 | `units` | Reopen the unit selection for an existing stack |
 | `list` | List stacks with the number of units they use |
 | `remove` | Delete a stack and its directory |
+| `snapshot` | Write the `stack.st8` snapshot of a stack |
+| `diff` | Compare a stack against a `stack.st8` snapshot |
 | `sync` | Reconcile the inventory with the files on disk |
 | `init`, `plan`, `apply`, `destroy`, `validate` | Run the matching Terragrunt command |
 | `format` | Run `terragrunt hclfmt` |
@@ -113,6 +116,52 @@ the command does not run on a terminal.
 
 > `stack units` regenerates `terragrunt.stack.hcl` from the template, so manual edits to that file
 > are lost.
+
+### Snapshots and diffs
+
+Every stack carries a `stack.st8` snapshot, refreshed whenever the stack is created or its units
+change, and on demand with `stack snapshot`. It is a plain text file with a pipe separated header and
+`[section]` blocks:
+
+```
+version|1
+stack|platform
+path|stacks/shared/platform
+
+[units]
+database
+storage
+
+[dependencies]
+storage|database
+
+[diagram]
+digraph "platform" { ... }
+
+[cost]
+{ "stack": "platform", "units": [ ... ] }
+```
+
+The `[units]` and `[dependencies]` sections always exist. `[diagram]` and `[cost]` are contributed by
+the extensions through the `snapshot` hook, so a snapshot only carries what is actually installed.
+The diagram is stored as raw DOT, which means graphviz is not needed to take a snapshot. The cost
+section is JSON so it stays machine readable; the markdown rendering is what `cost report` is for.
+
+`stack diff` compares the current state against a snapshot taken earlier and writes a markdown
+report:
+
+```bash
+st8atlas stack snapshot --name platform
+cp stacks/shared/platform/stack.st8 baseline.st8
+
+# ...change things...
+
+st8atlas stack diff --name platform --baseline baseline.st8
+st8atlas stack diff --name platform --baseline baseline.st8 --output report.md
+```
+
+The report contains a summary table, per-unit and per-dependency change tables, and the raw diagram
+and cost breakdown of both sides in collapsible blocks.
 
 ### unit
 
@@ -148,19 +197,26 @@ st8atlas diagram --name platform                  # writes diagram.png into the 
 st8atlas diagram --name platform --path out.png   # writes somewhere else
 ```
 
+Dependencies between units are included. Both `dependency "name" { config_path = ... }` and
+`dependencies { paths = [...] }` blocks in a unit's `terragrunt.hcl` are drawn as labelled edges.
+Targets that are not part of the stack are shown as dashed nodes marked *outside the stack*.
+
 ### cost
 
 Generates cost estimates with `c3x`. While this extension is installed, every new stack
-automatically gets a `c3x-usage.yml` usage configuration.
+automatically gets a `c3x-usage.yml` usage configuration, and every stack snapshot carries a `[cost]`
+section as JSON.
 
 ```bash
-st8atlas cost report --name platform   # run c3x estimate for a stack
-st8atlas cost sync                     # add the usage config to stacks that lack one
+st8atlas cost report --name platform                    # markdown to stdout
+st8atlas cost report --name platform --output cost.md   # markdown to a file
+st8atlas cost sync                                      # add the usage config where it is missing
 ```
 
-`cost report` runs `c3x estimate` against the Terraform module behind every unit of the stack,
-passing the stack's usage configuration. Use `cost sync` after installing the extension to backfill
-stacks that were created earlier.
+`cost report` produces structured markdown: an overview table of the stack's units and their modules,
+followed by one section per unit with the `c3x estimate --format markdown` breakdown. It runs against
+the Terraform module behind every unit, since `c3x` reads Terraform rather than Terragrunt. Use
+`cost sync` after installing the extension to backfill stacks that were created earlier.
 
 ## Output
 

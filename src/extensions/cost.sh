@@ -6,8 +6,9 @@ cost_usage() {
   usage_title "$(basename "$0") cost <capability> [args...]"
   usage_summary "Generate cost estimates with c3x. A usage configuration is added to every new stack."
   usage_section "Capabilities:"
-  usage_entry "  ├─" "report [args...]" "Generate the cost report for a stack"
-  usage_argument "  │  └─" "--name <name>" "Name of the stack (required)"
+  usage_entry "  ├─" "report [args...]" "Write the markdown cost breakdown of a stack"
+  usage_argument "  │  ├─" "--name <name>" "Name of the stack (required)"
+  usage_argument "  │  └─" "--output <file>" "Write the report here instead of stdout"
   usage_entry "  └─" "sync" "Add the usage configuration to every stack that lacks one"
 }
 
@@ -55,10 +56,22 @@ cost_report() {
   stack_require_existing "$ARG_NAME"
   ensure_command c3x "Install c3x to generate cost estimates."
 
+  if [[ -n "$ARG_OUTPUT" ]]; then
+    cost_markdown "$ARG_NAME" > "$ARG_OUTPUT"
+    log_info "Wrote cost report '${ARG_OUTPUT}'."
+  else
+    cost_markdown "$ARG_NAME"
+  fi
+}
+
+# Renders the cost breakdown of a stack as markdown, one section per unit.
+cost_markdown() {
+  local name="$1"
+
   local directory stack_file usage_file
-  directory="$(stack_directory "$ARG_NAME")"
+  directory="$(stack_directory "$name")"
   stack_file="${directory}/${STACK_FILE_NAME}"
-  cost_write_usage "$ARG_NAME" "$directory" || true
+  cost_write_usage "$name" "$directory" || true
   usage_file="${directory}/${COST_USAGE_FILE_NAME}"
 
   local units=() unit
@@ -67,21 +80,109 @@ cost_report() {
     units+=("$unit")
   done < <(stack_unit_names "$stack_file")
 
-  [[ ${#units[@]} -gt 0 ]] \
-    || die "Stack '${ARG_NAME}' has no units. Add some with '$(basename "$0") stack units --name ${ARG_NAME}'."
+  echo "# Cost breakdown: ${name}"
+  echo ""
 
-  # c3x reads Terraform, so the estimate runs against the module behind every unit.
+  if [[ ${#units[@]} -eq 0 ]]; then
+    echo "_The stack has no units._"
+    return 0
+  fi
+
+  echo "| Unit | Module | Estimated |"
+  echo "| --- | --- | :---: |"
   local module_directory
   for unit in "${units[@]}"; do
+    module_directory="${MODULES_DIR_NAME}/${unit}"
+    if [[ -d "${ST8_PROJECT_ROOT}/${module_directory}" ]]; then
+      echo "| \`${unit}\` | \`${module_directory}\` | yes |"
+    else
+      echo "| \`${unit}\` | _missing_ | no |"
+    fi
+  done
+  echo ""
+
+  # c3x reads Terraform, so the estimate runs against the module behind every unit.
+  for unit in "${units[@]}"; do
+    echo "## Unit \`${unit}\`"
+    echo ""
+
     module_directory="${ST8_PROJECT_ROOT}/${MODULES_DIR_NAME}/${unit}"
     if [[ ! -d "$module_directory" ]]; then
-      log_warn "Unit '${unit}' has no module at '${MODULES_DIR_NAME}/${unit}', skipping."
+      echo "_No module at \`${MODULES_DIR_NAME}/${unit}\`, skipped._"
+      echo ""
       continue
     fi
 
-    log_info "Estimating unit '${unit}'."
-    c3x estimate --path "$module_directory" --usage "$usage_file"
+    # c3x emits its own '## c3x estimate' heading, demote it below the unit heading.
+    c3x estimate --format markdown --path "$module_directory" --usage "$usage_file" 2>&1 \
+      | sed 's/^#/##/' \
+      || echo "_c3x failed for this unit._"
+    echo ""
   done
+}
+
+# Renders the cost breakdown of a stack as JSON, for the machine readable snapshot.
+cost_json() {
+  local name="$1"
+
+  local directory stack_file usage_file
+  directory="$(stack_directory "$name")"
+  stack_file="${directory}/${STACK_FILE_NAME}"
+  cost_write_usage "$name" "$directory" || true
+  usage_file="${directory}/${COST_USAGE_FILE_NAME}"
+
+  local units=() unit
+  while IFS= read -r unit; do
+    [[ -n "$unit" ]] || continue
+    units+=("$unit")
+  done < <(stack_unit_names "$stack_file")
+
+  echo "{"
+  echo "  \"stack\": \"${name}\","
+  echo "  \"units\": ["
+
+  local module_directory estimate
+  local index=0 last=$(( ${#units[@]} - 1 ))
+  for unit in "${units[@]}"; do
+    module_directory="${ST8_PROJECT_ROOT}/${MODULES_DIR_NAME}/${unit}"
+
+    echo "    {"
+    echo "      \"unit\": \"${unit}\","
+    echo "      \"module\": \"${MODULES_DIR_NAME}/${unit}\","
+
+    if [[ ! -d "$module_directory" ]]; then
+      echo "      \"error\": \"no module at ${MODULES_DIR_NAME}/${unit}\","
+      echo "      \"estimate\": null"
+    elif estimate="$(c3x estimate --format json --path "$module_directory" --usage "$usage_file" 2> /dev/null)"; then
+      echo "      \"estimate\":"
+      echo "$estimate" | sed 's/^/      /'
+    else
+      echo "      \"error\": \"c3x failed\","
+      echo "      \"estimate\": null"
+    fi
+
+    if [[ $index -lt $last ]]; then
+      echo "    },"
+    else
+      echo "    }"
+    fi
+    index=$((index + 1))
+  done
+
+  echo "  ]"
+  echo "}"
+}
+
+# Contributes the machine readable cost breakdown to the stack snapshot.
+cost_hook_snapshot() {
+  local name="$1"
+  echo "[cost]"
+  if command -v c3x > /dev/null 2>&1; then
+    cost_json "$name"
+  else
+    echo "{ \"stack\": \"${name}\", \"error\": \"c3x is not installed\", \"units\": [] }"
+  fi
+  echo ""
 }
 
 cost_sync() {
