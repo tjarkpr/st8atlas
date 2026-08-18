@@ -1,5 +1,3 @@
-# Text styles are disabled when stdout is not a terminal or NO_COLOR is set,
-# so piped and captured output stays plain.
 RESET=''
 BOLD=''
 DIM=''

@@ -6,17 +6,37 @@ ST8="${REPO_ROOT}/src/st8atlas.sh"
 
 FAILURES=0
 
-# terraform/terragrunt are stubbed so the tests stay offline and side effect free.
+# terraform/terragrunt/c3x are stubbed so the tests stay offline and side effect free.
 STUB_DIR="$(mktemp -d)"
-for stub in terraform terragrunt; do
+for stub in terraform terragrunt c3x; do
   printf '#!/usr/bin/env bash\necho "STUB %s $*"\n' "$stub" > "${STUB_DIR}/${stub}"
   chmod +x "${STUB_DIR}/${stub}"
 done
+
+# The graphviz stub writes the file that -o points at.
+cat > "${STUB_DIR}/dot" <<'STUB'
+#!/usr/bin/env bash
+output=""
+previous=""
+for argument in "$@"; do
+  [[ "$previous" == "-o" ]] && output="$argument"
+  previous="$argument"
+done
+cat > /dev/null
+[[ -n "$output" ]] && echo "STUB png" > "$output"
+STUB
+chmod +x "${STUB_DIR}/dot"
+
 PATH="${STUB_DIR}:${PATH}"
 export PATH
 
 WORK_DIR="$(mktemp -d)"
-trap 'rm -rf "$STUB_DIR" "$WORK_DIR"' EXIT
+
+# The core suite runs without extensions, they get their own section below.
+NO_EXTENSIONS_DIR="$(mktemp -d)"
+export ST8ATLAS_EXTENSIONS_DIR="$NO_EXTENSIONS_DIR"
+
+trap 'rm -rf "$STUB_DIR" "$WORK_DIR" "$NO_EXTENSIONS_DIR"' EXIT
 
 pass() { echo "  ok   - $1"; }
 fail() { echo "  FAIL - $1"; FAILURES=$((FAILURES + 1)); }
@@ -185,6 +205,34 @@ assert_success "unit remove" bash "$ST8" unit remove --name storage
 assert_no_path "unit directory removed" "${PROJECT_DIR}/units/storage"
 assert_no_path "module directory removed" "${PROJECT_DIR}/modules/storage"
 assert_failure "removing an unknown stack fails" bash "$ST8" stack remove --name network
+
+echo "extensions"
+assert_failure "cost is unknown without the extension" bash "$ST8" cost sync
+assert_failure "diagram is unknown without the extension" bash "$ST8" diagram --name network
+assert_no_path "no usage config without the cost extension" "${PROJECT_DIR}/stacks/shared/platform/c3x-usage.yml"
+
+EXTENSIONS_DIR="$(mktemp -d)"
+cp "${REPO_ROOT}/src/extensions/cost.sh" "${REPO_ROOT}/src/extensions/diagram.sh" "$EXTENSIONS_DIR/"
+export ST8ATLAS_EXTENSIONS_DIR="$EXTENSIONS_DIR"
+
+assert_output "extensions show up in the usage" "Extensions:" bash "$ST8"
+assert_success "unit add for the extension tests" bash "$ST8" unit add --name metering
+assert_success "stack add with extensions" bash "$ST8" stack add --name billing --units metering --no-interactive
+assert_path "stack creation adds the c3x usage config" "${PROJECT_DIR}/stacks/billing/c3x-usage.yml"
+assert_file_contains "usage config names the stack" "${PROJECT_DIR}/stacks/billing/c3x-usage.yml" "stack 'billing'"
+assert_success "cost report delegates to c3x" bash "$ST8" cost report --name billing
+assert_output "cost report calls c3x estimate" "STUB c3x estimate" bash "$ST8" cost report --name billing
+assert_output "cost report points c3x at the module" "modules/metering" bash "$ST8" cost report --name billing
+assert_success "cost sync backfills existing stacks" bash "$ST8" cost sync
+assert_path "cost sync adds the config to older stacks" "${PROJECT_DIR}/stacks/shared/platform/c3x-usage.yml"
+assert_success "diagram renders" bash "$ST8" diagram --name billing
+assert_path "diagram.png created" "${PROJECT_DIR}/stacks/billing/diagram.png"
+assert_success "diagram honours --path" bash "$ST8" diagram --name billing --path "${PROJECT_DIR}/custom.png"
+assert_path "diagram written to the custom path" "${PROJECT_DIR}/custom.png"
+assert_failure "diagram on an unknown stack fails" bash "$ST8" diagram --name missing
+
+export ST8ATLAS_EXTENSIONS_DIR="$NO_EXTENSIONS_DIR"
+rm -rf "$EXTENSIONS_DIR"
 
 echo
 if [[ $FAILURES -eq 0 ]]; then

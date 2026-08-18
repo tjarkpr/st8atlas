@@ -146,6 +146,8 @@ stack_add() {
   state_upsert "stack" "$ARG_NAME" "$relative_directory" "$ARG_DESCRIPTION"
 
   log_info "Added stack '${ARG_NAME}' at '${relative_directory}' with ${#SELECTION[@]} unit(s)."
+
+  run_hook stack_created "$ARG_NAME" "$directory"
 }
 
 # Rewrites the stack file from the template, so manual edits to it are lost.

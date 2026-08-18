@@ -27,12 +27,17 @@ shell profile.
 | `--version <tag>` | Install a specific release instead of the latest |
 | `--install-dir <dir>` | Where the sources are unpacked |
 | `--bin-dir <dir>` | Where the `st8atlas` launcher is linked |
+| `--with <a,b>` | Optional extensions to install |
+| `--with-all` | Install every available extension |
 | `--no-profile` | Do not modify your shell profile |
 | `--uninstall` | Remove a previous installation |
 
 ```bash
 # Pin a version and keep the profile untouched
 ./install.sh --version v1.2.0 --no-profile
+
+# Install with both extensions
+./install.sh --with diagram,cost
 
 # Remove it again
 ./install.sh --uninstall
@@ -129,6 +134,34 @@ st8atlas unit remove --name storage --force   # removes it anyway
 Removing a unit that is still referenced by a stack fails. `--force` overrides this and warns about
 the dangling references it leaves behind.
 
+## Extensions
+
+Extensions are optional and ship with every release, but are only active when installed with
+`--with` or `--with-all`. They appear as additional commands under `Extensions:` in the help output.
+
+### diagram
+
+Renders a stack, its units and their modules as a PNG. Requires [graphviz](https://graphviz.org/).
+
+```bash
+st8atlas diagram --name platform                  # writes diagram.png into the stack
+st8atlas diagram --name platform --path out.png   # writes somewhere else
+```
+
+### cost
+
+Generates cost estimates with `c3x`. While this extension is installed, every new stack
+automatically gets a `c3x-usage.yml` usage configuration.
+
+```bash
+st8atlas cost report --name platform   # run c3x estimate for a stack
+st8atlas cost sync                     # add the usage config to stacks that lack one
+```
+
+`cost report` runs `c3x estimate` against the Terraform module behind every unit of the stack,
+passing the stack's usage configuration. Use `cost sync` after installing the extension to backfill
+stacks that were created earlier.
+
 ## Output
 
 Colors are enabled on terminals and disabled automatically when the output is piped or when
@@ -140,8 +173,11 @@ Colors are enabled on terminals and disabled automatically when the output is pi
 bash test/smoke.sh
 ```
 
-The smoke test stubs `terraform` and `terragrunt`, then exercises every command against a throwaway
-project in a temporary directory.
+The smoke test stubs `terraform`, `terragrunt`, `c3x` and `dot`, then exercises every command against
+a throwaway project in a temporary directory, once without and once with the extensions.
+
+Running `src/st8atlas.sh` directly loads every extension in `src/extensions`. Set
+`ST8ATLAS_EXTENSIONS_DIR` to another directory to control which ones are active.
 
 ## License
 

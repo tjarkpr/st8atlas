@@ -5,7 +5,6 @@ ARG_UNITS=""
 ARG_FORCE="false"
 ARG_INTERACTIVE="true"
 
-# Parses the common options. Anything unknown is an error.
 parse_options() {
   ARG_NAME=""
   ARG_DESCRIPTION=""

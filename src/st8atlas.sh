@@ -24,8 +24,6 @@ source_artifacts() {
   done
 }
 
-# The installer links this script into a bin directory, so follow the symlink chain
-# to find the real installation.
 SOURCE="${BASH_SOURCE[0]}"
 while [[ -L "$SOURCE" ]]; do
   SOURCE_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
@@ -36,6 +34,7 @@ done
 INSTALL_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
 COMMANDS_DIR="${INSTALL_DIR}/commands"
 LIB_DIR="${INSTALL_DIR}/lib"
+EXTENSIONS_DIR="${ST8ATLAS_EXTENSIONS_DIR:-${INSTALL_DIR}/extensions}"
 
 ensure_artifacts "$LIB_DIR"
 ensure_artifacts "$COMMANDS_DIR"
@@ -46,6 +45,8 @@ AVAILABLE_COMMANDS=($(ls "${COMMANDS_DIR}"/*.sh | xargs -n 1 basename | sed 's/\
 source_artifacts "$LIB_DIR" "${AVAILABLE_LIBS[@]}"
 source_artifacts "$COMMANDS_DIR" "${AVAILABLE_COMMANDS[@]}"
 
+load_extensions "$EXTENSIONS_DIR"
+
 usage() {
   usage_title "$(basename "$0") <command> [args...]"
   usage_section "Commands:"
@@ -54,6 +55,16 @@ usage() {
       "${cmd}_desc"
     fi
   done
+
+  if [[ ${#ST8_EXTENSIONS[@]} -gt 0 ]]; then
+    usage_section "Extensions:"
+    for cmd in "${ST8_EXTENSIONS[@]}"; do
+      if declare -f "${cmd}_desc" > /dev/null; then
+        "${cmd}_desc"
+      fi
+    done
+  fi
+
   echo
   echo "${DIM}Run '$(basename "$0") <command> --help' for details.${RESET}"
 }
@@ -63,7 +74,9 @@ usage() {
 COMMAND="$1"
 shift
 
-if [[ " ${AVAILABLE_COMMANDS[*]} " == *" $COMMAND "* ]]; then
+KNOWN_COMMANDS=("${AVAILABLE_COMMANDS[@]}" ${ST8_EXTENSIONS[@]+"${ST8_EXTENSIONS[@]}"})
+
+if [[ " ${KNOWN_COMMANDS[*]} " == *" $COMMAND "* ]]; then
   if declare -f "${COMMAND}_main" > /dev/null; then
     ensure_dependencies
     "${COMMAND}_main" "$@"

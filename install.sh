@@ -9,6 +9,7 @@ INSTALL_DIR="${ST8ATLAS_INSTALL_DIR:-${HOME}/.local/share/st8atlas}"
 BIN_DIR="${ST8ATLAS_BIN_DIR:-${HOME}/.local/bin}"
 UNINSTALL="false"
 UPDATE_PROFILE="true"
+EXTENSIONS=""
 
 usage() {
   cat <<EOF
@@ -20,6 +21,8 @@ Options:
   --version <tag>       Release tag to install (default: latest)
   --install-dir <dir>   Where the sources are installed (default: ${INSTALL_DIR})
   --bin-dir <dir>       Where the launcher is linked (default: ${BIN_DIR})
+  --with <a,b>          Optional extensions to install (e.g. diagram,cost)
+  --with-all            Install every available extension
   --no-profile          Do not touch your shell profile
   --uninstall           Remove a previous installation
   -h, --help            Show this help
@@ -34,6 +37,8 @@ while [[ $# -gt 0 ]]; do
     --version)      [[ $# -ge 2 ]] || die "Missing value for '--version'."; VERSION="$2"; shift 2 ;;
     --install-dir)  [[ $# -ge 2 ]] || die "Missing value for '--install-dir'."; INSTALL_DIR="$2"; shift 2 ;;
     --bin-dir)      [[ $# -ge 2 ]] || die "Missing value for '--bin-dir'."; BIN_DIR="$2"; shift 2 ;;
+    --with)         [[ $# -ge 2 ]] || die "Missing value for '--with'."; EXTENSIONS="$2"; shift 2 ;;
+    --with-all)     EXTENSIONS="all"; shift ;;
     --no-profile)   UPDATE_PROFILE="false"; shift ;;
     --uninstall)    UNINSTALL="true"; shift ;;
     -h|--help)      usage; exit 0 ;;
@@ -103,6 +108,23 @@ mkdir -p "$INSTALL_DIR"
 cp -R "${SOURCE_DIR}/." "$INSTALL_DIR/"
 chmod +x "${INSTALL_DIR}/${COMMAND_NAME}.sh"
 echo "$VERSION" > "${INSTALL_DIR}/VERSION"
+
+# Extensions ship with every release but are only activated when selected.
+rm -rf "${INSTALL_DIR}/extensions"
+mkdir -p "${INSTALL_DIR}/extensions"
+
+if [[ "$EXTENSIONS" == "all" ]]; then
+  EXTENSIONS="$(find "${SOURCE_DIR}/extensions" -maxdepth 1 -type f -name '*.sh' -exec basename {} .sh \; 2> /dev/null | sort | tr '\n' ',')"
+fi
+
+IFS=',' read -r -a SELECTED_EXTENSIONS <<< "$EXTENSIONS"
+for extension in ${SELECTED_EXTENSIONS[@]+"${SELECTED_EXTENSIONS[@]}"}; do
+  [[ -n "$extension" ]] || continue
+  [[ -f "${SOURCE_DIR}/extensions/${extension}.sh" ]] \
+    || die "Unknown extension '${extension}'. Available: $(find "${SOURCE_DIR}/extensions" -maxdepth 1 -type f -name '*.sh' -exec basename {} .sh \; 2> /dev/null | sort | tr '\n' ' ')"
+  cp "${SOURCE_DIR}/extensions/${extension}.sh" "${INSTALL_DIR}/extensions/"
+  log "Enabled extension '${extension}'."
+done
 
 mkdir -p "$BIN_DIR"
 ln -sf "${INSTALL_DIR}/${COMMAND_NAME}.sh" "${BIN_DIR}/${COMMAND_NAME}"

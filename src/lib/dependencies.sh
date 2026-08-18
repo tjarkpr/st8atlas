@@ -12,3 +12,10 @@ ensure_dependencies() {
     exit 1
   fi
 }
+
+# ensure_command <executable> <hint>
+ensure_command() {
+  local executable="$1" hint="$2"
+  command -v "$executable" > /dev/null 2>&1 \
+    || die "'${executable}' is required but not on your PATH. ${hint}"
+}
